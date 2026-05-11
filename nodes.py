@@ -1,8 +1,9 @@
 import torch
 import json
 import os
+import struct
+import wave
 import numpy as np
-import torchaudio
 from comfy_api.latest import io, ui
 from server import PromptServer
 import folder_paths
@@ -72,7 +73,7 @@ class AudioTrimmerNode(io.ComfyNode):
         # Send at ~2000 samples/sec for pixel-perfect rendering at any zoom
         samples_data = _compute_mono_samples(waveform, sample_rate)
 
-        # Save full audio to temp as FLAC (lossless) for frontend playback
+        # Save full audio to temp as WAV for frontend playback
         audio_filename = _save_full_audio_to_temp(waveform, sample_rate, cls.hidden.unique_id)
 
         # Send waveform samples + audio file reference to frontend
@@ -119,18 +120,33 @@ class AudioTrimmerNode(io.ComfyNode):
 
 
 def _save_full_audio_to_temp(waveform, sample_rate, node_id):
-    """Save the full audio to temp directory as FLAC for browser playback.
+    """Save the full audio to temp directory as WAV for browser playback.
     
-    Uses FLAC encoding which is fully lossless — the decoded audio is
-    bit-identical to the original waveform samples.
+    Uses Python's built-in wave module — zero external dependencies.
+    Converts float32 tensor to 16-bit PCM WAV. This is only for the
+    Play button preview — the actual trimmed output is pure tensor
+    slicing with zero quality loss.
     """
     temp_dir = folder_paths.get_temp_directory()
-    filename = f"audio_trimmer_preview_{node_id}.flac"
+    filename = f"audio_trimmer_preview_{node_id}.wav"
     filepath = os.path.join(temp_dir, filename)
 
-    # waveform is [B, C, T], torchaudio expects [C, T]
-    audio_data = waveform[0].cpu()
-    torchaudio.save(filepath, audio_data, sample_rate, format="flac")
+    # waveform is [B, C, T] — take first batch
+    audio = waveform[0].cpu()  # [C, T]
+    channels = audio.shape[0]
+    
+    # Clamp and convert float32 -> int16 PCM
+    audio_clamped = torch.clamp(audio, -1.0, 1.0)
+    int16_data = (audio_clamped * 32767).to(torch.int16)
+    
+    # Interleave channels: [C, T] -> [T, C] -> flat
+    interleaved = int16_data.t().contiguous().numpy().tobytes()
+    
+    with wave.open(filepath, 'wb') as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(2)  # 16-bit = 2 bytes
+        wf.setframerate(sample_rate)
+        wf.writeframes(interleaved)
 
     return filename
 
