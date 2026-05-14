@@ -59,6 +59,7 @@ class TimelineState {
     this.audioFile = null;
     this.isPlaying = false;
     this.playheadTime = 0;
+    this.version = 0;
   }
 }
 
@@ -309,8 +310,14 @@ class AudioPlayer {
 
       // Fetch and decode audio buffer (cache it for repeat plays)
       if (!this.buffer || this._cachedUrl !== audioFileUrl) {
+        // Stop any current decoding or playback
+        if (this.source) { this.stop(state); }
+        
         const response = await fetch(audioFileUrl);
+        if (!response.ok) throw new Error(`Failed to fetch audio: ${response.statusText}`);
         const arrayBuf = await response.arrayBuffer();
+        
+        // Using decodeAudioData's promise signature
         this.buffer = await this.ctx.decodeAudioData(arrayBuf);
         this._cachedUrl = audioFileUrl;
       }
@@ -453,7 +460,7 @@ app.registerExtension({
           render();
           return;
         }
-        const audioUrl = api.apiURL(`/view?filename=${encodeURIComponent(state.audioFile)}&type=temp`);
+        const audioUrl = api.apiURL(`/view?filename=${encodeURIComponent(state.audioFile)}&type=temp&v=${state.version || 0}`);
         player.play(state, audioUrl, render, () => { setPlayBtnState(false); render(); });
         setPlayBtnState(true);
       });
@@ -597,14 +604,25 @@ app.registerExtension({
       // ── Listen for waveform data from server ──
       api.addEventListener("audio_trimmer.waveform_data", ({ detail }) => {
         if (String(detail.node_id) !== String(node.id)) return;
+        
+        const isNewFile = state.audioFile !== detail.audio_file || Math.abs(state.duration - detail.duration) > 0.1;
+        
         // Store raw samples as Float32Array for fast per-pixel peak computation
         state.samples = new Float32Array(detail.samples);
         state.duration = detail.duration;
         state.sampleRate = detail.sample_rate;
         state.channels = detail.channels;
         state.audioFile = detail.audio_file || null;
-        if (state.endTime <= 0 || state.endTime > state.duration) state.endTime = state.duration;
-        if (state.startTime > state.duration) state.startTime = 0;
+        state.version = detail.version || 0;
+
+        if (isNewFile) {
+          state.startTime = 0;
+          state.endTime = state.duration;
+        } else {
+          if (state.endTime <= 0 || state.endTime > state.duration) state.endTime = state.duration;
+          if (state.startTime > state.duration) state.startTime = 0;
+        }
+        
         updateWidgets();
         render();
       });

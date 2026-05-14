@@ -77,6 +77,7 @@ class AudioTrimmerNode(io.ComfyNode):
         audio_filename = _save_full_audio_to_temp(waveform, sample_rate, cls.hidden.unique_id)
 
         # Send waveform samples + audio file reference to frontend
+        import time
         PromptServer.instance.send_sync(
             "audio_trimmer.waveform_data",
             {
@@ -87,6 +88,7 @@ class AudioTrimmerNode(io.ComfyNode):
                 "sample_rate": sample_rate,
                 "channels": waveform.shape[1],
                 "audio_file": audio_filename,
+                "version": time.time(), # cache buster
             },
         )
 
